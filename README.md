@@ -15,7 +15,7 @@ Mobile-to-mobile local sharing. This is the Android companion project for HADOC 
 
 ## Connection technology
 
-This project uses Google Play services Nearby Connections with the P2P_CLUSTER strategy. Nearby Connections can discover and connect devices offline and uses Bluetooth, BLE and Wi-Fi transports as appropriate. Shared files are not uploaded to a cloud service.
+This project uses Google Play services Nearby Connections with the P2P_POINT_TO_POINT strategy (one-to-one, highest-bandwidth topology). Nearby Connections can discover and connect devices offline and uses Bluetooth, BLE and Wi-Fi transports as appropriate. Shared files are not uploaded to a cloud service.
 
 Both phones need Google Play services with Nearby Connections support. Wi-Fi and Bluetooth should be enabled. Android may show a system permission prompt the first time the app starts.
 
