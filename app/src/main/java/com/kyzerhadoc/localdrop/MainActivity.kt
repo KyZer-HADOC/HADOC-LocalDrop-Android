@@ -601,6 +601,7 @@ private class NearbyEngine(
     private val mainHandler = Handler(Looper.getMainLooper())
     private val io = Executors.newCachedThreadPool()
     private val endpoints = ConcurrentHashMap.newKeySet<String>()
+    private val endpointNames = ConcurrentHashMap<String, String>()
     private val requested = ConcurrentHashMap.newKeySet<String>()
     private val fileTransferIds = ConcurrentHashMap.newKeySet<Long>()
     private val outgoingIds = ConcurrentHashMap.newKeySet<Long>()
@@ -619,10 +620,10 @@ private class NearbyEngine(
         started = true
         post { callbacks.onStatus("Searching for nearby phones…", false) }
         val advertising = AdvertisingOptions.Builder()
-            .setStrategy(Strategy.P2P_CLUSTER)
+            .setStrategy(Strategy.P2P_POINT_TO_POINT)
             .build()
         val discovery = DiscoveryOptions.Builder()
-            .setStrategy(Strategy.P2P_CLUSTER)
+            .setStrategy(Strategy.P2P_POINT_TO_POINT)
             .build()
 
         client.startAdvertising(
@@ -738,6 +739,7 @@ private class NearbyEngine(
 
     private val lifecycleCallback: ConnectionLifecycleCallback = object : ConnectionLifecycleCallback() {
         override fun onConnectionInitiated(endpointId: String, info: ConnectionInfo) {
+            endpointNames[endpointId] = info.endpointName
             post { callbacks.onStatus("Connecting to " + info.endpointName + "…", false) }
             client.acceptConnection(endpointId, payloadCallback)
                 .addOnFailureListener { error ->
@@ -749,7 +751,8 @@ private class NearbyEngine(
             if (resolution.status.isSuccess) {
                 endpoints.add(endpointId)
                 requested.add(endpointId)
-                post { callbacks.onStatus("Connected • " + (Build.MODEL ?: "Android") + " ↔ phone", true) }
+                val remoteName = endpointNames[endpointId] ?: "Nearby phone"
+                post { callbacks.onStatus("Connected • " + remoteName, true) }
             } else {
                 requested.remove(endpointId)
                 post { callbacks.onStatus("Could not connect. Searching again…", false) }
@@ -759,6 +762,7 @@ private class NearbyEngine(
         override fun onDisconnected(endpointId: String) {
             endpoints.remove(endpointId)
             requested.remove(endpointId)
+            endpointNames.remove(endpointId)
             post {
                 callbacks.onStatus("Phone disconnected • searching again…", false)
             }
@@ -767,12 +771,12 @@ private class NearbyEngine(
                     Build.MODEL ?: "Android",
                     SERVICE_ID,
                     lifecycleCallback,
-                    AdvertisingOptions.Builder().setStrategy(Strategy.P2P_CLUSTER).build()
+                    AdvertisingOptions.Builder().setStrategy(Strategy.P2P_POINT_TO_POINT).build()
                 )
                 client.startDiscovery(
                     SERVICE_ID,
                     discoveryCallback,
-                    DiscoveryOptions.Builder().setStrategy(Strategy.P2P_CLUSTER).build()
+                    DiscoveryOptions.Builder().setStrategy(Strategy.P2P_POINT_TO_POINT).build()
                 )
             }
         }
