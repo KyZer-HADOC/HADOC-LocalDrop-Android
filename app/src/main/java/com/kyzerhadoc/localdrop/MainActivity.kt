@@ -526,6 +526,31 @@ private fun MessageBubble(
     }
 }
 
+
+private fun openReceivedFile(context: Context, path: String) {
+    try {
+        val file = File(path)
+        val uri = FileProvider.getUriForFile(context, "com.kyzerhadoc.localdrop.files", file)
+        val extension = file.extension.lowercase()
+        val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) ?: "*/*"
+        val view = Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        context.startActivity(Intent.createChooser(view, "Open received file"))
+    } catch (_: Exception) {
+        Toast.makeText(context, "No app found to open this file", Toast.LENGTH_SHORT).show()
+    }
+}
+
+private fun formatBytes(bytes: Long): String {
+    if (bytes < 0) return "—"
+    if (bytes < 1024) return bytes.toString() + " B"
+    val kb = bytes / 1024.0
+    if (kb < 1024) return String.format("%.1f KB", kb)
+    val mb = kb / 1024.0
+    if (mb < 1024) return String.format("%.1f MB", mb)
+    return String.format("%.2f GB", mb / 1024.0)
+}
+
 private class LocalLanEngine(
     context: Context,
     private val callbacks: Callbacks
