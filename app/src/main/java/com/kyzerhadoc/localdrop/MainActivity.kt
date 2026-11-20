@@ -1,9 +1,7 @@
 package com.kyzerhadoc.localdrop
 
-import android.Manifest
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -14,7 +12,6 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -67,23 +64,33 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
-import com.google.android.gms.nearby.Nearby
-import com.google.android.gms.nearby.connection.AdvertisingOptions
-import com.google.android.gms.nearby.connection.ConnectionInfo
-import com.google.android.gms.nearby.connection.ConnectionLifecycleCallback
-import com.google.android.gms.nearby.connection.ConnectionResolution
-import com.google.android.gms.nearby.connection.ConnectionsClient
-import com.google.android.gms.nearby.connection.DiscoveredEndpointInfo
-import com.google.android.gms.nearby.connection.DiscoveryOptions
-import com.google.android.gms.nearby.connection.EndpointDiscoveryCallback
-import com.google.android.gms.nearby.connection.Payload
-import com.google.android.gms.nearby.connection.PayloadCallback
-import com.google.android.gms.nearby.connection.PayloadTransferUpdate
-import com.google.android.gms.nearby.connection.Strategy
 import java.io.File
 import java.io.FileOutputStream
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.wifi.WifiManager
+import android.os.SystemClock
+import androidx.compose.foundation.Image
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
+import java.io.DataInputStream
+import java.io.DataOutputStream
+import java.io.FileInputStream
+import java.io.IOException
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.Inet4Address
+import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.NetworkInterface
+import java.net.ServerSocket
+import java.net.Socket
+import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
@@ -91,7 +98,9 @@ import android.database.Cursor
 import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
 
-private const val SERVICE_ID = "com.kyzerhadoc.localdrop.mobile.v1"
+private const val TCP_PORT = 46789
+private const val DISCOVERY_PORT = 46790
+private const val PROTOCOL_PREFIX = "HADOC_LOCALDROP_WIFI_V1"
 private val Background = Color(0xFF090A0F)
 private val Panel = Color(0xFF151821)
 private val Crimson = Color(0xFFE53950)
@@ -143,13 +152,13 @@ private fun LocalDropScreen() {
     val context = LocalContext.current
     val messages = remember { mutableStateListOf<ChatEntry>() }
     val transfers = remember { mutableStateMapOf<Long, TransferUi>() }
-    var connectionStatus by remember { mutableStateOf("Searching for nearby phones…") }
+    var connectionStatus by remember { mutableStateOf("Finding phones on this Wi-Fi / hotspot…") }
     var connected by remember { mutableStateOf(false) }
     var draft by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
 
     val engine = remember {
-        NearbyEngine(context, object : NearbyEngine.Callbacks {
+        LocalLanEngine(context, object : LocalLanEngine.Callbacks {
             override fun onStatus(message: String, isConnected: Boolean) {
                 connectionStatus = message
                 connected = isConnected
@@ -223,28 +232,8 @@ private fun LocalDropScreen() {
         }
     }
 
-    val requiredPermissions = remember { requiredNearbyPermissions() }
-    val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { result ->
-        if (result.values.all { it }) {
-            engine.start()
-        } else {
-            connectionStatus = "Nearby permissions are required to connect"
-            connected = false
-        }
-    }
-
     LaunchedEffect(Unit) {
-        val missing = requiredPermissions.filter {
-            ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
-        }
-        if (missing.isEmpty()) {
-            engine.start()
-        } else {
-            connectionStatus = "Allow Nearby devices to start auto-connect"
-            permissionLauncher.launch(missing.toTypedArray())
-        }
+        engine.start()
     }
 
     DisposableEffect(engine) {
@@ -267,14 +256,12 @@ private fun LocalDropScreen() {
                 .padding(horizontal = 18.dp, vertical = 16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(
-                modifier = Modifier
-                    .size(44.dp)
-                    .background(Crimson, RoundedCornerShape(14.dp)),
-                contentAlignment = Alignment.Center
-            ) {
-                Text("H", color = Color.White, fontSize = 25.sp, fontWeight = FontWeight.Black)
-            }
+            Image(
+                painter = painterResource(id = R.drawable.ic_localdrop),
+                contentDescription = "HADOC LocalDrop",
+                modifier = Modifier.size(48.dp),
+                contentScale = ContentScale.Fit
+            )
             Column(
                 modifier = Modifier
                     .weight(1f)
@@ -345,13 +332,13 @@ private fun LocalDropScreen() {
                     )
                     Text(
                         if (connected) "Phone connected. Send a message or add files."
-                        else "Open HADOC LocalDrop on the second phone nearby.",
+                        else "Open LocalDrop on a second phone connected to the same Wi-Fi or hotspot.",
                         color = Muted,
                         fontSize = 13.sp,
                         modifier = Modifier.padding(top = 8.dp)
                     )
                     Text(
-                        "No cloud • No mobile data • Local transfer",
+                        "Wi-Fi / Hotspot only  •  No Bluetooth  •  No cloud",
                         color = Color(0xFF687284),
                         fontSize = 11.sp,
                         modifier = Modifier.padding(top = 15.dp)
@@ -538,53 +525,7 @@ private fun MessageBubble(
     }
 }
 
-private fun requiredNearbyPermissions(): Array<String> {
-    val permissions = mutableListOf<String>()
-    if (Build.VERSION.SDK_INT >= 33) {
-        permissions += Manifest.permission.NEARBY_WIFI_DEVICES
-        permissions += Manifest.permission.BLUETOOTH_SCAN
-        permissions += Manifest.permission.BLUETOOTH_ADVERTISE
-        permissions += Manifest.permission.BLUETOOTH_CONNECT
-    } else if (Build.VERSION.SDK_INT >= 31) {
-        permissions += Manifest.permission.ACCESS_FINE_LOCATION
-        permissions += Manifest.permission.BLUETOOTH_SCAN
-        permissions += Manifest.permission.BLUETOOTH_ADVERTISE
-        permissions += Manifest.permission.BLUETOOTH_CONNECT
-    } else if (Build.VERSION.SDK_INT >= 29) {
-        permissions += Manifest.permission.ACCESS_FINE_LOCATION
-    } else {
-        permissions += Manifest.permission.ACCESS_COARSE_LOCATION
-        permissions += Manifest.permission.BLUETOOTH
-        permissions += Manifest.permission.BLUETOOTH_ADMIN
-    }
-    return permissions.distinct().toTypedArray()
-}
-
-private fun openReceivedFile(context: Context, path: String) {
-    try {
-        val file = File(path)
-        val uri = FileProvider.getUriForFile(context, "com.kyzerhadoc.localdrop.files", file)
-        val extension = file.extension.lowercase()
-        val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) ?: "*/*"
-        val view = Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime)
-            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        context.startActivity(Intent.createChooser(view, "Open received file"))
-    } catch (_: Exception) {
-        Toast.makeText(context, "No app found to open this file", Toast.LENGTH_SHORT).show()
-    }
-}
-
-private fun formatBytes(bytes: Long): String {
-    if (bytes < 0) return "—"
-    if (bytes < 1024) return bytes.toString() + " B"
-    val kb = bytes / 1024.0
-    if (kb < 1024) return String.format("%.1f KB", kb)
-    val mb = kb / 1024.0
-    if (mb < 1024) return String.format("%.1f MB", mb)
-    return String.format("%.2f GB", mb / 1024.0)
-}
-
-private class NearbyEngine(
+private class LocalLanEngine(
     context: Context,
     private val callbacks: Callbacks
 ) {
@@ -597,118 +538,200 @@ private class NearbyEngine(
     }
 
     private val appContext = context.applicationContext
-    private val client: ConnectionsClient = Nearby.getConnectionsClient(appContext)
+    private val connectivity = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+    private val wifiManager = appContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+    private val preferences = appContext.getSharedPreferences("localdrop_lan", Context.MODE_PRIVATE)
+    private val localId = preferences.getString("device_id", null) ?: UUID.randomUUID().toString().also {
+        preferences.edit().putString("device_id", it).apply()
+    }
+    private val localName = (Build.MODEL ?: "Android phone").take(40)
     private val mainHandler = Handler(Looper.getMainLooper())
     private val io = Executors.newCachedThreadPool()
-    private val endpoints = ConcurrentHashMap.newKeySet<String>()
-    private val endpointNames = ConcurrentHashMap<String, String>()
-    private val requested = ConcurrentHashMap.newKeySet<String>()
-    private val fileTransferIds = ConcurrentHashMap.newKeySet<Long>()
-    private val outgoingIds = ConcurrentHashMap.newKeySet<Long>()
-    private val receivedFiles = ConcurrentHashMap<Long, Payload>()
-    private val completedFiles = ConcurrentHashMap<Long, Payload>()
-    private val receivedNames = ConcurrentHashMap<Long, String>()
-    private val outgoingDescriptors = ConcurrentHashMap<Long, android.os.ParcelFileDescriptor>()
-    @Volatile private var started = false
+    private val started = AtomicBoolean(false)
+    private val connecting = ConcurrentHashMap.newKeySet<String>()
+    private val connectionLock = Any()
+    private val outputLock = Any()
+    private val nextTransferId = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis() shl 10)
+
+    @Volatile private var serverSocket: ServerSocket? = null
+    @Volatile private var discoverySocket: DatagramSocket? = null
+    @Volatile private var activeSocket: Socket? = null
+    @Volatile private var output: DataOutputStream? = null
+    @Volatile private var multicastLock: WifiManager.MulticastLock? = null
 
     private fun post(action: () -> Unit) {
         mainHandler.post(action)
     }
 
+    private fun wifiNetwork(): Network? {
+        val active = connectivity.activeNetwork
+        if (active != null &&
+            connectivity.getNetworkCapabilities(active)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+        ) return active
+        return connectivity.allNetworks.firstOrNull { network ->
+            connectivity.getNetworkCapabilities(network)
+                ?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+        }
+    }
+
+    private fun isWifiInterface(name: String): Boolean {
+        val value = name.lowercase()
+        return value.startsWith("wlan") ||
+            value.startsWith("swlan") ||
+            value.startsWith("ap") ||
+            value.startsWith("wifi")
+    }
+
+    private fun wifiBroadcastAddresses(): List<InetAddress> {
+        val addresses = linkedSetOf<InetAddress>()
+        try {
+            val interfaces = NetworkInterface.getNetworkInterfaces()
+            while (interfaces != null && interfaces.hasMoreElements()) {
+                val networkInterface = interfaces.nextElement()
+                if (!networkInterface.isUp || networkInterface.isLoopback ||
+                    !isWifiInterface(networkInterface.name)
+                ) continue
+                for (address in networkInterface.interfaceAddresses) {
+                    val broadcast = address.broadcast
+                    if (address.address is Inet4Address && broadcast != null) {
+                        addresses.add(broadcast)
+                    }
+                }
+            }
+        } catch (_: Exception) {
+        }
+        return addresses.toList()
+    }
+
     fun start() {
-        if (started) return
-        started = true
-        post { callbacks.onStatus("Searching for nearby phones…", false) }
-        val advertising = AdvertisingOptions.Builder()
-            .setStrategy(Strategy.P2P_POINT_TO_POINT)
-            .build()
-        val discovery = DiscoveryOptions.Builder()
-            .setStrategy(Strategy.P2P_POINT_TO_POINT)
-            .build()
-
-        client.startAdvertising(
-            Build.MODEL ?: "Android",
-            SERVICE_ID,
-            lifecycleCallback,
-            advertising
-        ).addOnFailureListener { error ->
-            post { callbacks.onStatus("Advertising failed: " + (error.message ?: "check permissions"), false) }
+        if (!started.compareAndSet(false, true)) return
+        try {
+            multicastLock = wifiManager.createMulticastLock("HADOC-LocalDrop-WiFi").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        } catch (_: Exception) {
         }
 
-        client.startDiscovery(
-            SERVICE_ID,
-            discoveryCallback,
-            discovery
-        ).addOnFailureListener { error ->
-            post { callbacks.onStatus("Discovery failed: " + (error.message ?: "check Wi-Fi/Bluetooth"), false) }
+        post {
+            callbacks.onStatus(
+                if (wifiNetwork() != null || wifiBroadcastAddresses().isNotEmpty()) {
+                    "Searching on local Wi-Fi / hotspot…"
+                } else {
+                    "Turn on Wi-Fi and join the same Wi-Fi or hotspot on both phones"
+                },
+                false
+            )
         }
+
+        io.execute { acceptLoop() }
+        io.execute { discoveryLoop() }
+        io.execute { broadcastLoop() }
     }
 
     fun stop() {
-        started = false
-        client.stopAdvertising()
-        client.stopDiscovery()
-        client.stopAllEndpoints()
-        endpoints.clear()
-        requested.clear()
-        io.shutdown()
+        if (!started.compareAndSet(true, false)) return
+        try { serverSocket?.close() } catch (_: Exception) {}
+        try { discoverySocket?.close() } catch (_: Exception) {}
+        try { activeSocket?.close() } catch (_: Exception) {}
+        try { multicastLock?.let { if (it.isHeld) it.release() } } catch (_: Exception) {}
+        multicastLock = null
+        output = null
+        io.shutdownNow()
     }
 
     fun sendText(text: String) {
-        val endpoint = endpoints.firstOrNull() ?: return
-        val payload = Payload.fromBytes(("TEXT|" + text).toByteArray(StandardCharsets.UTF_8))
-        client.sendPayload(endpoint, payload)
+        val bytes = text.toByteArray(StandardCharsets.UTF_8)
+        if (bytes.size > 4 * 1024 * 1024) {
+            post { callbacks.onStatus("Message is too large", true) }
+            return
+        }
+        try {
+            synchronized(outputLock) {
+                val stream = output ?: throw IOException("Phone is not connected")
+                stream.writeByte(1)
+                stream.writeInt(bytes.size)
+                stream.write(bytes)
+                stream.flush()
+            }
+        } catch (error: Exception) {
+            onConnectionError(error)
+        }
     }
 
     fun sendFile(uri: Uri) {
-        val endpoint = endpoints.firstOrNull()
-        if (endpoint == null) {
-            post { callbacks.onStatus("Connect another phone before sending files", false) }
+        if (activeSocket?.isConnected != true) {
+            post { callbacks.onStatus("Connect another phone on the same Wi-Fi first", false) }
             return
         }
+
         io.execute {
-            var descriptor: android.os.ParcelFileDescriptor? = null
+            var temporaryFile: File? = null
             try {
-                descriptor = appContext.contentResolver.openFileDescriptor(uri, "r")
-                    ?: throw IllegalStateException("Cannot read the selected file")
                 val name = queryDisplayName(uri)
-                val size = descriptor.statSize
-                val payload = Payload.fromFile(descriptor)
-                val id = payload.id
-                outgoingIds.add(id)
-                fileTransferIds.add(id)
-                outgoingDescriptors[id] = descriptor
-                descriptor = null
-                val encodedName = Base64.encodeToString(name.toByteArray(StandardCharsets.UTF_8), Base64.NO_WRAP)
-                val metadata = "META|" + id + "|" + size + "|" + encodedName
-                post { callbacks.onTransferCreated(id, name, size, true) }
-                client.sendPayload(
-                    endpoint,
-                    Payload.fromBytes(metadata.toByteArray(StandardCharsets.UTF_8))
-                ).addOnFailureListener { error ->
-                    post { callbacks.onStatus("File details could not be sent: " + (error.message ?: "error"), true) }
-                }
-                client.sendPayload(endpoint, payload).addOnFailureListener { error ->
-                    post {
-                        callbacks.onTransferProgress(id, true, 0L, size, "Failed")
-                        callbacks.onStatus("File transfer failed: " + (error.message ?: "error"), true)
+                val outgoingFolder = File(appContext.cacheDir, "outgoing").apply { mkdirs() }
+                val uploadFile = File.createTempFile("localdrop_", ".upload", outgoingFolder)
+                temporaryFile = uploadFile
+
+                val source = appContext.contentResolver.openInputStream(uri)
+                    ?: throw IOException("Cannot read the selected file")
+                source.use { input ->
+                    FileOutputStream(uploadFile).use { fileOutput ->
+                        input.copyTo(fileOutput, 64 * 1024)
                     }
-                    outgoingDescriptors.remove(id)?.close()
                 }
+
+                val size = uploadFile.length()
+                val id = nextTransferId.incrementAndGet().and(Long.MAX_VALUE)
+                post { callbacks.onTransferCreated(id, name, size, true) }
+
+                var sent = 0L
+                var lastUpdate = 0L
+                synchronized(outputLock) {
+                    val stream = output ?: throw IOException("Phone disconnected before transfer")
+                    stream.writeByte(2)
+                    stream.writeLong(id)
+                    stream.writeUTF(name.take(500))
+                    stream.writeLong(size)
+                    stream.flush()
+
+                    FileInputStream(uploadFile).use { input ->
+                        val buffer = ByteArray(64 * 1024)
+                        while (true) {
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            stream.write(buffer, 0, count)
+                            sent += count
+
+                            val now = SystemClock.elapsedRealtime()
+                            if (now - lastUpdate >= 250L || sent == size) {
+                                stream.flush()
+                                lastUpdate = now
+                                val progress = sent
+                                post {
+                                    callbacks.onTransferProgress(id, true, progress, size, "Sending")
+                                }
+                            }
+                        }
+                    }
+                    stream.flush()
+                }
+                post { callbacks.onTransferProgress(id, true, size, size, "Complete") }
             } catch (error: Exception) {
-                descriptor?.close()
-                post { callbacks.onStatus("Could not prepare file: " + (error.message ?: "error"), true) }
+                post { callbacks.onStatus("File transfer failed: " + (error.message ?: "connection lost"), false) }
+            } finally {
+                try { temporaryFile?.delete() } catch (_: Exception) {}
             }
         }
     }
 
     private fun queryDisplayName(uri: Uri): String {
         var name = uri.lastPathSegment ?: "Shared file"
-        var cursor: Cursor? = null
+        var cursor: android.database.Cursor? = null
         try {
             cursor = appContext.contentResolver.query(uri, null, null, null, null)
             if (cursor != null && cursor.moveToFirst()) {
-                val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                val index = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
                 if (index >= 0) name = cursor.getString(index) ?: name
             }
         } catch (_: Exception) {
@@ -718,181 +741,280 @@ private class NearbyEngine(
         return File(name).name.ifBlank { "Shared file" }
     }
 
-    private val discoveryCallback: EndpointDiscoveryCallback = object : EndpointDiscoveryCallback() {
-        override fun onEndpointFound(endpointId: String, info: DiscoveredEndpointInfo) {
-            if (endpoints.isEmpty() && requested.add(endpointId)) {
-                post { callbacks.onStatus("Found " + info.endpointName + " • connecting…", false) }
-                client.requestConnection(
-                    Build.MODEL ?: "Android",
-                    endpointId,
-                    lifecycleCallback
-                ).addOnFailureListener {
-                    requested.remove(endpointId)
-                }
-            }
-        }
-
-        override fun onEndpointLost(endpointId: String) {
-            requested.remove(endpointId)
-        }
+    private fun helloPacket(): ByteArray {
+        val encodedName = Base64.encodeToString(
+            localName.toByteArray(StandardCharsets.UTF_8),
+            Base64.NO_WRAP or Base64.URL_SAFE
+        )
+        return "$PROTOCOL_PREFIX|$localId|$TCP_PORT|$encodedName".toByteArray(StandardCharsets.UTF_8)
     }
 
-    private val lifecycleCallback: ConnectionLifecycleCallback = object : ConnectionLifecycleCallback() {
-        override fun onConnectionInitiated(endpointId: String, info: ConnectionInfo) {
-            endpointNames[endpointId] = info.endpointName
-            post { callbacks.onStatus("Connecting to " + info.endpointName + "…", false) }
-            client.acceptConnection(endpointId, payloadCallback)
-                .addOnFailureListener { error ->
-                    post { callbacks.onStatus("Connection rejected: " + (error.message ?: "error"), false) }
-                }
-        }
-
-        override fun onConnectionResult(endpointId: String, resolution: ConnectionResolution) {
-            if (resolution.status.isSuccess) {
-                endpoints.add(endpointId)
-                requested.add(endpointId)
-                val remoteName = endpointNames[endpointId] ?: "Nearby phone"
-                post { callbacks.onStatus("Connected • " + remoteName, true) }
-            } else {
-                requested.remove(endpointId)
-                post { callbacks.onStatus("Could not connect. Searching again…", false) }
-            }
-        }
-
-        override fun onDisconnected(endpointId: String) {
-            endpoints.remove(endpointId)
-            requested.remove(endpointId)
-            endpointNames.remove(endpointId)
-            post {
-                callbacks.onStatus("Phone disconnected • searching again…", false)
-            }
-            if (started) {
-                client.startAdvertising(
-                    Build.MODEL ?: "Android",
-                    SERVICE_ID,
-                    lifecycleCallback,
-                    AdvertisingOptions.Builder().setStrategy(Strategy.P2P_POINT_TO_POINT).build()
-                )
-                client.startDiscovery(
-                    SERVICE_ID,
-                    discoveryCallback,
-                    DiscoveryOptions.Builder().setStrategy(Strategy.P2P_POINT_TO_POINT).build()
-                )
-            }
-        }
-    }
-
-    private val payloadCallback: PayloadCallback = object : PayloadCallback() {
-        override fun onPayloadReceived(endpointId: String, payload: Payload) {
-            when (payload.type) {
-                Payload.Type.BYTES -> {
-                    val value = String(payload.asBytes() ?: ByteArray(0), StandardCharsets.UTF_8)
-                    if (value.startsWith("TEXT|")) {
-                        post { callbacks.onTextReceived(value.removePrefix("TEXT|")) }
-                    } else if (value.startsWith("META|")) {
-                        val parts = value.split("|", limit = 4)
-                        if (parts.size == 4) {
-                            val id = parts[1].toLongOrNull()
-                            if (id != null) {
-                                val name = try {
-                                    String(Base64.decode(parts[3], Base64.NO_WRAP), StandardCharsets.UTF_8)
-                                } catch (_: Exception) {
-                                    "Shared file"
-                                }
-                                val size = parts[2].toLongOrNull() ?: -1L
-                                receivedNames[id] = File(name).name
-                                fileTransferIds.add(id)
-                                post { callbacks.onTransferCreated(id, File(name).name, size, false) }
-                                processCompletedFile(id)
-                            }
-                        }
-                    }
-                }
-                Payload.Type.FILE -> {
-                    receivedFiles[payload.id] = payload
-                    fileTransferIds.add(payload.id)
-                    post {
-                        callbacks.onTransferCreated(
-                            payload.id,
-                            receivedNames[payload.id] ?: "Incoming file…",
-                            -1L,
-                            false
-                        )
-                    }
-                }
-                else -> Unit
-            }
-        }
-
-        override fun onPayloadTransferUpdate(endpointId: String, update: PayloadTransferUpdate) {
-            val id = update.payloadId
-            if (!fileTransferIds.contains(id)) return
-            val mine = outgoingIds.contains(id)
-            val status = when (update.status) {
-                PayloadTransferUpdate.Status.IN_PROGRESS -> if (mine) "Sending" else "Receiving"
-                PayloadTransferUpdate.Status.SUCCESS -> "Complete"
-                PayloadTransferUpdate.Status.FAILURE -> "Failed"
-                PayloadTransferUpdate.Status.CANCELED -> "Canceled"
-                else -> "Working"
-            }
-            post {
-                callbacks.onTransferProgress(
-                    id,
-                    mine,
-                    update.bytesTransferred,
-                    update.totalBytes,
-                    status
-                )
-            }
-
-            if (update.status == PayloadTransferUpdate.Status.SUCCESS && !mine) {
-                receivedFiles[id]?.let { completedFiles[id] = it }
-                processCompletedFile(id)
-            }
-
-            if (update.status == PayloadTransferUpdate.Status.SUCCESS ||
-                update.status == PayloadTransferUpdate.Status.FAILURE ||
-                update.status == PayloadTransferUpdate.Status.CANCELED
-            ) {
-                outgoingDescriptors.remove(id)?.close()
-            }
-        }
-    }
-
-    private fun processCompletedFile(id: Long) {
-        val payload = completedFiles[id] ?: return
-        val name = receivedNames[id] ?: return
-        if (!completedFiles.remove(id, payload)) return
-        receivedFiles.remove(id)
-        io.execute {
+    private fun broadcastLoop() {
+        while (started.get()) {
             try {
-                val receivedFile = payload.asFile()
-                    ?: throw IllegalStateException("Received file payload is unavailable")
-                val sourceUri = receivedFile.asUri()
-                    ?: throw IllegalStateException("Received file URI is unavailable")
-                val folder = File(appContext.filesDir, "received")
-                folder.mkdirs()
-                val safeName = File(name).name.ifBlank { "received_file" }
-                var destination = File(folder, safeName)
-                if (destination.exists()) {
-                    destination = File(folder, System.currentTimeMillis().toString() + "_" + safeName)
+                val socket = DatagramSocket()
+                socket.broadcast = true
+                wifiNetwork()?.let { network ->
+                    try { network.bindSocket(socket) } catch (_: Exception) {}
                 }
-                val input = appContext.contentResolver.openInputStream(sourceUri)
-                    ?: throw IllegalStateException("Received file could not be opened")
-                input.use { stream ->
-                    FileOutputStream(destination).use { output ->
-                        stream.copyTo(output, 64 * 1024)
+                val bytes = helloPacket()
+                val destinations = wifiBroadcastAddresses().toMutableSet()
+                try { destinations.add(InetAddress.getByName("255.255.255.255")) } catch (_: Exception) {}
+                for (address in destinations) {
+                    try {
+                        socket.send(DatagramPacket(bytes, bytes.size, address, DISCOVERY_PORT))
+                    } catch (_: Exception) {
                     }
                 }
-                appContext.contentResolver.delete(sourceUri, null, null)
-                receivedNames.remove(id)
-                post { callbacks.onFileReceived(id, destination.absolutePath, destination.length()) }
-            } catch (error: Exception) {
-                post {
-                    callbacks.onTransferProgress(id, false, 0L, -1L, "Failed")
-                    callbacks.onStatus("Could not save received file: " + (error.message ?: "error"), true)
+                socket.close()
+            } catch (_: Exception) {
+            }
+            try { Thread.sleep(1800L) } catch (_: InterruptedException) { break }
+        }
+    }
+
+    private fun discoveryLoop() {
+        var socket: DatagramSocket? = null
+        try {
+            socket = DatagramSocket(null).apply {
+                reuseAddress = true
+                broadcast = true
+                soTimeout = 1500
+                bind(InetSocketAddress(DISCOVERY_PORT))
+            }
+            wifiNetwork()?.let { network ->
+                try { network.bindSocket(socket) } catch (_: Exception) {}
+            }
+            discoverySocket = socket
+
+            val buffer = ByteArray(1024)
+            while (started.get()) {
+                try {
+                    val packet = DatagramPacket(buffer, buffer.size)
+                    socket.receive(packet)
+                    val message = String(packet.data, packet.offset, packet.length, StandardCharsets.UTF_8)
+                    val parts = message.split("|", limit = 4)
+                    if (parts.size != 4 || parts[0] != PROTOCOL_PREFIX) continue
+
+                    val remoteId = parts[1]
+                    val remotePort = parts[2].toIntOrNull() ?: continue
+                    if (remoteId == localId || remoteId.isBlank() || remotePort !in 1..65535) continue
+
+                    val remoteName = try {
+                        String(Base64.decode(parts[3], Base64.NO_WRAP or Base64.URL_SAFE), StandardCharsets.UTF_8)
+                    } catch (_: Exception) {
+                        "Nearby phone"
+                    }
+
+                    if (activeSocket?.isConnected == true) continue
+                    if (localId < remoteId && connecting.add(remoteId)) {
+                        post { callbacks.onStatus("Found $remoteName • connecting over Wi-Fi…", false) }
+                        val address = packet.address
+                        io.execute { connectTo(address, remotePort, remoteId, remoteName) }
+                    }
+                } catch (_: java.net.SocketTimeoutException) {
+                } catch (_: Exception) {
+                    if (started.get()) post {
+                        callbacks.onStatus("Wi-Fi discovery retrying…", false)
+                    }
                 }
             }
+        } catch (error: Exception) {
+            if (started.get()) post {
+                callbacks.onStatus("Cannot listen for Wi-Fi devices: " + (error.message ?: "network error"), false)
+            }
+        } finally {
+            try { socket?.close() } catch (_: Exception) {}
+            discoverySocket = null
+        }
+    }
+
+    private fun acceptLoop() {
+        var server: ServerSocket? = null
+        try {
+            server = ServerSocket().apply {
+                reuseAddress = true
+                bind(InetSocketAddress(TCP_PORT), 8)
+                soTimeout = 1500
+            }
+            serverSocket = server
+            while (started.get()) {
+                try {
+                    val socket = server.accept()
+                    io.execute { acceptPeer(socket) }
+                } catch (_: java.net.SocketTimeoutException) {
+                }
+            }
+        } catch (error: Exception) {
+            if (started.get()) post {
+                callbacks.onStatus("Cannot open local Wi-Fi port: " + (error.message ?: "port unavailable"), false)
+            }
+        } finally {
+            try { server?.close() } catch (_: Exception) {}
+            serverSocket = null
+        }
+    }
+
+    private fun connectTo(address: InetAddress, port: Int, remoteId: String, remoteName: String) {
+        var pendingSocket: Socket? = null
+        try {
+            val socket = Socket()
+            pendingSocket = socket
+            socket.tcpNoDelay = true
+            wifiNetwork()?.let { network ->
+                try { network.bindSocket(socket) } catch (_: Exception) {}
+            }
+            socket.connect(InetSocketAddress(address, port), 5000)
+
+            val input = DataInputStream(BufferedInputStream(socket.getInputStream()))
+            val stream = DataOutputStream(BufferedOutputStream(socket.getOutputStream()))
+            val encodedName = Base64.encodeToString(
+                localName.toByteArray(StandardCharsets.UTF_8),
+                Base64.NO_WRAP or Base64.URL_SAFE
+            )
+            stream.writeUTF("CONNECT|$localId|$encodedName")
+            stream.flush()
+
+            val response = input.readUTF()
+            val parts = response.split("|", limit = 3)
+            if (parts.size != 3 || parts[0] != "WELCOME" || parts[1] != remoteId) {
+                throw IOException("Phone identity handshake failed")
+            }
+            installConnection(socket, input, stream, remoteName)
+            pendingSocket = null
+        } catch (error: Exception) {
+            connecting.remove(remoteId)
+            if (started.get() && activeSocket?.isConnected != true) {
+                post { callbacks.onStatus("Could not connect to $remoteName • retrying…", false) }
+            }
+        } finally {
+            try { pendingSocket?.close() } catch (_: Exception) {}
+        }
+    }
+
+    private fun acceptPeer(socket: Socket) {
+        try {
+            socket.soTimeout = 6000
+            socket.tcpNoDelay = true
+            val input = DataInputStream(BufferedInputStream(socket.getInputStream()))
+            val stream = DataOutputStream(BufferedOutputStream(socket.getOutputStream()))
+            val request = input.readUTF()
+            val parts = request.split("|", limit = 3)
+            if (parts.size != 3 || parts[0] != "CONNECT") throw IOException("Invalid LocalDrop connection")
+
+            val remoteId = parts[1]
+            if (remoteId >= localId) throw IOException("Connection direction is not valid")
+            val remoteName = try {
+                String(Base64.decode(parts[2], Base64.NO_WRAP or Base64.URL_SAFE), StandardCharsets.UTF_8)
+            } catch (_: Exception) {
+                "Nearby phone"
+            }
+
+            val responseName = Base64.encodeToString(
+                localName.toByteArray(StandardCharsets.UTF_8),
+                Base64.NO_WRAP or Base64.URL_SAFE
+            )
+            stream.writeUTF("WELCOME|$localId|$responseName")
+            stream.flush()
+            socket.soTimeout = 0
+            installConnection(socket, input, stream, remoteName)
+        } catch (_: Exception) {
+            try { socket.close() } catch (_: Exception) {}
+        }
+    }
+
+    private fun installConnection(
+        socket: Socket,
+        input: DataInputStream,
+        stream: DataOutputStream,
+        remoteName: String
+    ) {
+        synchronized(connectionLock) {
+            if (activeSocket?.isConnected == true) {
+                socket.close()
+                return
+            }
+            activeSocket = socket
+            output = stream
+            connecting.clear()
+        }
+        post { callbacks.onStatus("Connected • $remoteName • Wi-Fi", true) }
+        io.execute { readLoop(socket, input) }
+    }
+
+    private fun readLoop(socket: Socket, input: DataInputStream) {
+        try {
+            while (started.get() && socket.isConnected && !socket.isClosed) {
+                when (input.readUnsignedByte()) {
+                    1 -> {
+                        val length = input.readInt()
+                        if (length < 0 || length > 4 * 1024 * 1024) throw IOException("Invalid message size")
+                        val bytes = ByteArray(length)
+                        input.readFully(bytes)
+                        val text = String(bytes, StandardCharsets.UTF_8)
+                        post { callbacks.onTextReceived(text) }
+                    }
+                    2 -> receiveFile(input)
+                    else -> throw IOException("Unknown LocalDrop packet")
+                }
+            }
+        } catch (_: Exception) {
+        } finally {
+            synchronized(connectionLock) {
+                if (activeSocket === socket) {
+                    activeSocket = null
+                    output = null
+                    try { socket.close() } catch (_: Exception) {}
+                    if (started.get()) post {
+                        callbacks.onStatus("Phone disconnected • searching on Wi-Fi…", false)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun receiveFile(input: DataInputStream) {
+        val id = input.readLong()
+        val name = File(input.readUTF()).name.ifBlank { "received_file" }
+        val total = input.readLong()
+        if (total < 0L) throw IOException("Invalid file size")
+
+        val folder = File(appContext.filesDir, "received").apply { mkdirs() }
+        val destination = File(folder, id.toString() + "_" + name)
+        post { callbacks.onTransferCreated(id, name, total, false) }
+
+        var received = 0L
+        var lastUpdate = 0L
+        FileOutputStream(destination).use { fileOutput ->
+            val buffer = ByteArray(64 * 1024)
+            while (received < total) {
+                val wanted = minOf(buffer.size.toLong(), total - received).toInt()
+                val count = input.read(buffer, 0, wanted)
+                if (count < 0) throw IOException("Connection ended during file transfer")
+                fileOutput.write(buffer, 0, count)
+                received += count
+
+                val now = SystemClock.elapsedRealtime()
+                if (now - lastUpdate >= 250L || received == total) {
+                    lastUpdate = now
+                    val progress = received
+                    post {
+                        callbacks.onTransferProgress(id, false, progress, total, "Receiving")
+                    }
+                }
+            }
+            fileOutput.flush()
+        }
+
+        post {
+            callbacks.onTransferProgress(id, false, total, total, "Complete")
+            callbacks.onFileReceived(id, destination.absolutePath, destination.length())
+        }
+    }
+
+    private fun onConnectionError(error: Exception) {
+        post {
+            callbacks.onStatus("Connection lost: " + (error.message ?: "Wi-Fi disconnected"), false)
         }
     }
 }
