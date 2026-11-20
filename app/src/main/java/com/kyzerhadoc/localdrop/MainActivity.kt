@@ -26,7 +26,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -718,7 +717,7 @@ private class NearbyEngine(
         return File(name).name.ifBlank { "Shared file" }
     }
 
-    private val discoveryCallback = object : EndpointDiscoveryCallback() {
+    private val discoveryCallback: EndpointDiscoveryCallback = object : EndpointDiscoveryCallback() {
         override fun onEndpointFound(endpointId: String, info: DiscoveredEndpointInfo) {
             if (endpoints.isEmpty() && requested.add(endpointId)) {
                 post { callbacks.onStatus("Found " + info.endpointName + " • connecting…", false) }
@@ -737,7 +736,7 @@ private class NearbyEngine(
         }
     }
 
-    private val lifecycleCallback = object : ConnectionLifecycleCallback() {
+    private val lifecycleCallback: ConnectionLifecycleCallback = object : ConnectionLifecycleCallback() {
         override fun onConnectionInitiated(endpointId: String, info: ConnectionInfo) {
             post { callbacks.onStatus("Connecting to " + info.endpointName + "…", false) }
             client.acceptConnection(endpointId, payloadCallback)
@@ -779,7 +778,7 @@ private class NearbyEngine(
         }
     }
 
-    private val payloadCallback = object : PayloadCallback() {
+    private val payloadCallback: PayloadCallback = object : PayloadCallback() {
         override fun onPayloadReceived(endpointId: String, payload: Payload) {
             when (payload.type) {
                 Payload.Type.BYTES -> {
@@ -863,7 +862,10 @@ private class NearbyEngine(
         receivedFiles.remove(id)
         io.execute {
             try {
-                val sourceUri = payload.asFile().asUri()
+                val receivedFile = payload.asFile()
+                    ?: throw IllegalStateException("Received file payload is unavailable")
+                val sourceUri = receivedFile.asUri()
+                    ?: throw IllegalStateException("Received file URI is unavailable")
                 val folder = File(appContext.filesDir, "received")
                 folder.mkdirs()
                 val safeName = File(name).name.ifBlank { "received_file" }
