@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="256"
+    android:viewportHeight="256">
+
+    <!-- HADOC LocalDrop original black / crimson transfer mark -->
+    <path android:fillColor="#090A0F"
+        android:pathData="M47,9 H209 A38,38 0,0 1,247 47 V209 A38,38 0,0 1,209 247 H47 A38,38 0,0 1,9 209 V47 A38,38 0,0 1,47 9 Z"/>
+    <path android:fillColor="#251019" android:fillAlpha="0.45"
+        android:pathData="M35,28 C83,3 172,8 224,40 C245,78 221,125 184,143 C124,172 43,126 24,83 C18,62 22,42 35,28 Z"/>
+
+    <!-- Laptop on the left -->
+    <path android:fillColor="#0F1620" android:strokeColor="#C2CFE0"
+        android:strokeWidth="2.2" android:pathData="M28,120 H104 V171 H28 Z"/>
+    <path android:fillColor="#05090F" android:pathData="M34,126 H98 V165 H34 Z"/>
+    <path android:fillColor="#F43A46" android:pathData="M52,141 H63 V152 H52 Z M67,141 H78 V152 H67 Z"/>
+    <path android:fillColor="#0F1620" android:strokeColor="#C2CFE0"
+        android:strokeWidth="2" android:pathData="M22,173 H110 L101,181 H32 Z"/>
+
+    <!-- Phone on the right -->
+    <path android:fillColor="#0F1620" android:strokeColor="#C2CFE0"
+        android:strokeWidth="2.2"
+        android:pathData="M187,119 H216 Q226,119 226,129 V179 Q226,189 216,189 H187 Q177,189 177,179 V129 Q177,119 187,119 Z"/>
+    <path android:fillColor="#05090F" android:pathData="M187,127 H216 Q221,127 221,132 V175 Q221,180 216,180 H187 Q182,180 182,175 V132 Q182,127 187,127 Z"/>
+    <path android:fillColor="#F43A46" android:pathData="M198,143 A4,4 0,1 0,206 143 A4,4 0,1 0,198 143 Z M195,154 H209 V167 H195 Z"/>
+
+    <!-- Wi-Fi arcs -->
+    <path android:fillColor="#00000000" android:strokeColor="#F54C54"
+        android:strokeWidth="5.5" android:strokeLineCap="round"
+        android:pathData="M96,57 C114,39 142,39 160,57"/>
+    <path android:fillColor="#00000000" android:strokeColor="#F54C54"
+        android:strokeWidth="5.5" android:strokeLineCap="round"
+        android:pathData="M108,69 C119,58 137,58 148,69"/>
+    <path android:fillColor="#00000000" android:strokeColor="#F54C54"
+        android:strokeWidth="5.5" android:strokeLineCap="round"
+        android:pathData="M120,81 C124,77 132,77 136,81"/>
+    <path android:fillColor="#F54C54" android:pathData="M124,82 A4,4 0,1 0,132 82 A4,4 0,1 0,124 82 Z"/>
+
+    <!-- Metallic H -->
+    <path android:fillColor="#E6EDF6" android:pathData="M79,78 H103 L116,177 H92 Z"/>
+    <path android:fillColor="#A6B8CF" android:pathData="M153,78 H177 L164,177 H140 Z"/>
+    <path android:fillColor="#D2DDEB" android:pathData="M99,118 H160 L157,141 H102 Z"/>
+
+    <!-- Crimson transfer arrow -->
+    <path android:fillColor="#F34A56"
+        android:pathData="M57,169 L151,93 L140,82 L204,72 L177,125 L175,108 L78,184 Z"/>
+
+    <!-- Orbit tying the two devices together -->
+    <path android:fillColor="#00000000" android:strokeColor="#F53644"
+        android:strokeWidth="2.8" android:pathData="M25,142 C34,198 85,226 128,226 C171,226 222,198 231,142"/>
+    <path android:fillColor="#00000000" android:strokeColor="#DDE7F3"
+        android:strokeWidth="1.5" android:pathData="M46,164 C58,207 92,218 128,218 C164,218 198,207 210,164"/>
+
+    <!-- Crimson frame -->
+    <path android:fillColor="#00000000" android:strokeColor="#EF3744"
+        android:strokeWidth="2.5"
+        android:pathData="M47,9 H209 A38,38 0,0 1,247 47 V209 A38,38 0,0 1,209 247 H47 A38,38 0,0 1,9 209 V47 A38,38 0,0 1,47 9 Z"/>
+</vector>
