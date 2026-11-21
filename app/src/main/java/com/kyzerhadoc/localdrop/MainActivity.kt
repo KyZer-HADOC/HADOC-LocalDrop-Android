@@ -465,7 +465,7 @@ private fun TopBar(
             }
         }
         Image(
-            painter = androidx.compose.ui.res.painterResource(id = R.drawable.ic_localdrop),
+            painter = androidx.compose.ui.res.painterResource(id = R.drawable.ld_brand),
             contentDescription = "HADOC LocalDrop",
             modifier = Modifier.size(47.dp)
         )
@@ -501,7 +501,7 @@ private fun HomePage(
         verticalArrangement = Arrangement.Center
     ) {
         Image(
-            painter = androidx.compose.ui.res.painterResource(id = R.drawable.ic_localdrop),
+            painter = androidx.compose.ui.res.painterResource(id = R.drawable.ld_brand),
             contentDescription = "HADOC LocalDrop",
             modifier = Modifier.size(132.dp)
         )
