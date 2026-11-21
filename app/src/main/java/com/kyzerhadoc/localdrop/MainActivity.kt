@@ -1215,13 +1215,18 @@ private class LocalLanEngine(
                     Base64.decode(parts[2], Base64.URL_SAFE or Base64.NO_WRAP),
                     StandardCharsets.UTF_8
                 )
-                synchronized(sessionLock) {
+                val claimToken = synchronized(sessionLock) {
                     if (tokenConsumed || closed) {
-                        socket.close()
-                        socket = null
-                        continue
+                        false
+                    } else {
+                        tokenConsumed = true
+                        true
                     }
-                    tokenConsumed = true
+                }
+                if (!claimToken) {
+                    socket.close()
+                    socket = null
+                    continue
                 }
 
                 val encodedName = Base64.encodeToString(
