@@ -1,48 +1,44 @@
 # HADOC LocalDrop Android
 
-**Mobile ↔ Mobile only.** A Wi-Fi LAN file-sharing and chat app for two Android phones.
+**Mobile ↔ Mobile only.** A SHAREit-style QR pairing and local Wi-Fi file-sharing app for two Android phones.
 
-## How to connect
+## Connect in two taps
 
-1. Connect both phones to the same Wi-Fi router, or connect the second phone to the first phone's hotspot.
-2. Turn Wi-Fi on. Bluetooth is not needed and the app does not ask for Bluetooth permissions.
-3. Open HADOC LocalDrop on both phones.
-4. The apps broadcast a small discovery message over the local Wi-Fi network and automatically establish a direct TCP connection when the other phone is found.
+1. On phone A, open LocalDrop and tap **Show QR**.
+2. Approve the Nearby Wi-Fi permission once. LocalDrop starts a temporary Android Local-Only Hotspot and displays a one-time QR code.
+3. On phone B, open LocalDrop and tap **Scan QR**.
+4. Scan phone A's QR. Android displays its system Wi-Fi join confirmation. Approve it; LocalDrop then authenticates the one-time QR token and opens the private chat.
 
-The app does not silently turn on a hotspot or join a protected Wi-Fi network. Android requires the user to enable a hotspot or approve joining a Wi-Fi network through system controls. Once both phones are on the same local network, discovery and connection are automatic.
+The hotspot is created by Android's Local-Only Hotspot API. It does not provide internet access; it exists only for direct local communication. The reservation stays open for the sharing session and is released when the session ends.
 
 ## Features
 
-- Automatic Wi-Fi LAN discovery and one-to-one connection.
-- Multiline chat messages in either direction.
-- Send files in either direction.
-- Transfer progress, transferred size, and live speed estimate.
-- Received files are saved inside the app and can be opened from the conversation.
-- No account, cloud storage, or external relay.
+- Show QR: creates a temporary host hotspot and displays one-time pairing QR credentials.
+- Scan QR: scans the host code and asks Android to join the temporary Wi-Fi network.
+- One-time token is consumed by the first successful connection.
+- Automatic direct TCP connection after Android confirms Wi-Fi joining.
+- One unified chat for multiline messages and files in both directions.
+- Live file progress, transfer size, speed estimate, and received-file opening.
+- No account, cloud storage, mobile data relay, or Bluetooth.
 
-## Network design
+## Android system note
 
-- UDP broadcast is used only to find another LocalDrop phone on the same Wi-Fi / hotspot network.
-- File and chat data travel directly over a TCP socket between the two phones.
-- Mobile/cellular interfaces are excluded from Wi-Fi discovery; the direct connection is bound to Android's Wi-Fi network when available.
-- No Bluetooth APIs or Google Nearby Connections dependency are used.
+Android controls Wi-Fi connection approval. After scanning, Android may show a system **Connect / Join** prompt; the user must approve it. The app cannot silently join a protected Wi-Fi network or silently enable the phone's normal internet-sharing hotspot.
 
-Both phones must be on the same local Wi-Fi network. A phone-to-phone transfer over the local network does not upload the file to the internet.
+The app uses WifiManager.startLocalOnlyHotspot() on the host and WifiNetworkSpecifier on Android 10+ joining devices. Local-Only Hotspot networks do not include internet access.
 
 ## Build
 
-Open the project in Android Studio or run:
+Open in Android Studio or run:
 
-```bash
+\`\`\`bash
 gradle assembleDebug
-```
+\`\`\`
 
-The APK is generated at:
+APK output: app/build/outputs/apk/debug/app-debug.apk
 
-`app/build/outputs/apk/debug/app-debug.apk`
-
-GitHub Actions builds a debug APK on every push to `main` and uploads it as an artifact.
+GitHub Actions builds and uploads a debug APK on every push to main.
 
 ## Scope
 
-This app is mobile-to-mobile only. It does not connect to the Windows LocalDrop app, and it does not provide PC-to-PC sharing.
+This Android app is **phone-to-phone only**. It does not connect to the Windows LocalDrop app and does not support PC-to-PC sharing.
