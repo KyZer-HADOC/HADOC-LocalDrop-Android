@@ -1091,8 +1091,23 @@ private class LocalLanEngine(
                 }
 
                 override fun onUnavailable() {
-                    post { callbacks.onStatus("Wi-Fi join was cancelled or unavailable. Scan the QR and try again.", false) }
-                    unregisterWifiCallback()
+                    // Some Android builds can report the request as unavailable even
+                    // though the selected local-only Wi-Fi network is already connected.
+                    // Check the active Wi-Fi networks for the exact QR SSID before failing.
+                    val matchingNetwork = connectivity.allNetworks.firstOrNull { candidate ->
+                        val caps = connectivity.getNetworkCapabilities(candidate)
+                        val wifiInfo = caps?.transportInfo as? android.net.wifi.WifiInfo
+                        caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true &&
+                            wifiInfo?.ssid?.trim('"') == info.ssid
+                    }
+
+                    if (matchingNetwork != null) {
+                        post { callbacks.onStatus("Hotspot connected • opening LocalDrop…", false) }
+                        io.execute { connectToHost(matchingNetwork, info.token) }
+                    } else {
+                        post { callbacks.onStatus("Android could not confirm the temporary Wi-Fi connection. Keep the hotspot connected and scan the QR again.", false) }
+                        unregisterWifiCallback()
+                    }
                 }
 
                 override fun onLost(network: Network) {
