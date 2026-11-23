@@ -110,6 +110,19 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.TimeUnit
+import okhttp3.Callback
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
+import okio.BufferedSink
+import org.json.JSONArray
+import org.json.JSONObject
 
 private const val TCP_PORT = 46789
 private const val QR_PREFIX = "HADOC_LOCALDROP"
@@ -278,8 +291,13 @@ private fun LocalDropApp() {
         if (!scanned.isNullOrBlank()) {
             qrPayload = ""
             page = "connecting"
-            status = "Requesting Wi-Fi connection…"
-            engine.joinFromQr(scanned)
+            if (scanned.startsWith("$QR_PREFIX|")) {
+                status = "Requesting temporary Wi-Fi connection…"
+                engine.joinFromQr(scanned)
+            } else {
+                status = "Connecting to your PC…"
+                engine.connectToPc(scanned)
+            }
         }
     }
 
@@ -386,7 +404,15 @@ private fun LocalDropApp() {
         when (page) {
             "home" -> HomePage(
                 onShowQr = { requestWifiPermission("host") },
-                onScanQr = { requestWifiPermission("scan") }
+                onScanQr = { requestWifiPermission("scan") },
+                onConnectPc = {
+                    val options = ScanOptions()
+                        .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                        .setPrompt("Scan the QR code shown by HADOC LocalDrop on your PC")
+                        .setBeepEnabled(false)
+                        .setOrientationLocked(false)
+                    scannerLauncher.launch(options)
+                }
             )
             "starting" -> ProgressPage(
                 title = "Preparing your hotspot",
@@ -491,7 +517,8 @@ private fun TopBar(
 @Composable
 private fun HomePage(
     onShowQr: () -> Unit,
-    onScanQr: () -> Unit
+    onScanQr: () -> Unit,
+    onConnectPc: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -514,7 +541,7 @@ private fun HomePage(
             modifier = Modifier.padding(top = 15.dp)
         )
         Text(
-            "Connect two phones directly. No internet, no Bluetooth.",
+            "Connect two phones or a Windows PC over your local network.",
             color = Muted,
             fontSize = 13.sp,
             textAlign = TextAlign.Center,
@@ -545,6 +572,19 @@ private fun HomePage(
             Text("  Scan QR", fontSize = 16.sp, fontWeight = FontWeight.Bold)
         }
 
+        Spacer(Modifier.height(13.dp))
+
+        Button(
+            onClick = onConnectPc,
+            modifier = Modifier.fillMaxWidth().height(62.dp),
+            shape = RoundedCornerShape(17.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF202B3B)),
+            contentPadding = PaddingValues(horizontal = 20.dp)
+        ) {
+            Icon(Icons.Default.Wifi, contentDescription = null, modifier = Modifier.size(23.dp))
+            Text("  Connect PC", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        }
+
         Card(
             modifier = Modifier.fillMaxWidth().padding(top = 27.dp),
             shape = RoundedCornerShape(16.dp),
@@ -558,7 +598,7 @@ private fun HomePage(
                 Column(Modifier.padding(start = 12.dp)) {
                     Text("Private Wi-Fi connection", color = MainText, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                     Text(
-                        "Show QR creates a temporary hotspot. Scan QR joins it and connects.",
+                        "Show QR or Scan QR for phone sharing. Connect PC scans your Windows app QR.",
                         color = Muted,
                         fontSize = 11.sp,
                         lineHeight = 16.sp
@@ -567,7 +607,7 @@ private fun HomePage(
             }
         }
         Text(
-            "ONE-TIME QR PAIRING  •  NO CLOUD  •  NO BLUETOOTH",
+            "MOBILE ↔ MOBILE  •  MOBILE ↔ PC  •  LOCAL NETWORK",
             color = Color(0xFF647186),
             fontSize = 9.sp,
             letterSpacing = 1.sp,
@@ -913,6 +953,19 @@ private class LocalLanEngine(
     private val deviceId = UUID.randomUUID().toString()
     private val deviceName = (Build.MODEL ?: "Android phone").take(40)
     private val transferIds = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis() shl 8)
+    private val httpClient = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(0, TimeUnit.SECONDS)
+        .writeTimeout(0, TimeUnit.SECONDS)
+        .build()
+    private val pcDownloadedFileIds = ConcurrentHashMap.newKeySet<String>()
+
+    @Volatile private var pcMode = false
+    @Volatile private var pcBaseUrl: String? = null
+    @Volatile private var pcToken: String? = null
+    @Volatile private var pcName = "Your PC"
+    @Volatile private var pcWebSocket: WebSocket? = null
+    @Volatile private var pcPollTask: Runnable? = null
 
     @Volatile private var hotspotReservation: WifiManager.LocalOnlyHotspotReservation? = null
     @Volatile private var hostServer: ServerSocket? = null
@@ -1282,7 +1335,306 @@ private class LocalLanEngine(
         io.execute { readLoop(socket, input) }
     }
 
+
+    fun connectToPc(qrUrl: String) {
+        val uri = try { Uri.parse(qrUrl.trim()) } catch (_: Exception) { null }
+        val scheme = uri?.scheme?.lowercase()
+        val host = uri?.host
+        val token = uri?.getQueryParameter("token")
+        if (uri == null || scheme !in setOf("http", "https") || host.isNullOrBlank() ||
+            token.isNullOrBlank() || token.length < 24) {
+            post { callbacks.onStatus("This is not a valid HADOC LocalDrop PC QR. Scan the QR shown in the Windows app.", false) }
+            return
+        }
+
+        val baseUrl = "$scheme://${uri.encodedAuthority}"
+        cancelSession()
+        closed = false
+        isHost = false
+        isJoining = true
+        pcMode = true
+        pcBaseUrl = baseUrl
+        pcToken = token
+        pcDownloadedFileIds.clear()
+        post { callbacks.onStatus("Contacting HADOC LocalDrop on your PC…", false) }
+
+        io.execute {
+            try {
+                val connectRequest = Request.Builder()
+                    .url("$baseUrl/api/connect")
+                    .header("X-LocalDrop-Token", token)
+                    .header("X-Device-Id", deviceId)
+                    .header("X-Device-Name", deviceName)
+                    .post(ByteArray(0).toRequestBody(null))
+                    .build()
+
+                val remotePcName = httpClient.newCall(connectRequest).execute().use { response ->
+                    val responseText = response.body?.string().orEmpty()
+                    if (!response.isSuccessful) {
+                        val detail = try { JSONObject(responseText).optString("error") } catch (_: Exception) { "" }
+                        throw IOException(detail.ifBlank { "PC rejected the connection (HTTP ${response.code})" })
+                    }
+                    JSONObject(responseText).optString("pcName", "Your PC")
+                }
+                pcName = remotePcName
+                if (!pcMode) return@execute
+
+                val wsBase = when (scheme) {
+                    "https" -> "wss://${uri.encodedAuthority}"
+                    else -> "ws://${uri.encodedAuthority}"
+                }
+                val socketRequest = Request.Builder()
+                    .url("$wsBase/ws?token=${Uri.encode(token)}")
+                    .build()
+
+                pcWebSocket = httpClient.newWebSocket(socketRequest, object : WebSocketListener() {
+                    override fun onOpen(webSocket: WebSocket, response: Response) {
+                        if (!pcMode) {
+                            webSocket.close(1000, "Session ended")
+                            return
+                        }
+                        isJoining = false
+                        post {
+                            callbacks.onPeerConnected(pcName)
+                            callbacks.onStatus("Connected • $pcName", true)
+                        }
+                        startPcFilePolling()
+                    }
+
+                    override fun onMessage(webSocket: WebSocket, text: String) {
+                        try {
+                            val message = JSONObject(text)
+                            val body = message.optString("text")
+                            if (body.isNotBlank()) post { callbacks.onTextReceived(body) }
+                        } catch (_: Exception) { }
+                    }
+
+                    override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                        if (pcMode) {
+                            post {
+                                callbacks.onStatus("PC connection closed. Scan the PC QR again to reconnect.", false)
+                                cancelSession()
+                            }
+                        }
+                    }
+
+                    override fun onFailure(webSocket: WebSocket, error: Throwable, response: Response?) {
+                        if (pcMode) {
+                            val detail = error.message ?: "WebSocket connection failed"
+                            post {
+                                callbacks.onStatus("PC live connection failed: $detail", false)
+                                cancelSession()
+                            }
+                        }
+                    }
+                })
+            } catch (error: Exception) {
+                if (pcMode) {
+                    val detail = error.message ?: "Could not reach the PC"
+                    post {
+                        callbacks.onStatus("Could not connect to PC: $detail", false)
+                        cancelSession()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun pcRequest(path: String): Request.Builder {
+        val base = pcBaseUrl ?: throw IOException("PC session is not active")
+        val token = pcToken ?: throw IOException("PC pairing token is missing")
+        return Request.Builder()
+            .url(base + path)
+            .header("X-LocalDrop-Token", token)
+    }
+
+    private fun startPcFilePolling() {
+        pcPollTask?.let { mainHandler.removeCallbacks(it) }
+        val task = object : Runnable {
+            override fun run() {
+                if (!pcMode) return
+                io.execute { refreshPcFiles() }
+                mainHandler.postDelayed(this, 3500L)
+            }
+        }
+        pcPollTask = task
+        mainHandler.post(task)
+    }
+
+    private fun refreshPcFiles() {
+        if (!pcMode) return
+        try {
+            val request = pcRequest("/api/files").get().build()
+            val items = httpClient.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) throw IOException("PC file list failed (HTTP ${response.code})")
+                JSONArray(response.body?.string().orEmpty())
+            }
+            for (index in 0 until items.length()) {
+                val item = items.optJSONObject(index) ?: continue
+                val id = item.optString("id")
+                val name = item.optString("name", "Shared file")
+                val size = item.optLong("size", 0L)
+                if (id.isNotBlank() && pcDownloadedFileIds.add(id)) {
+                    io.execute { downloadPcFile(id, name, size) }
+                }
+            }
+        } catch (error: Exception) {
+            if (pcMode) post { callbacks.onStatus("PC file sync: ${error.message ?: "retrying"}", true) }
+        }
+    }
+
+    private fun pcUiId(id: String): Long = id.hashCode().toLong() and Long.MAX_VALUE
+
+    private fun downloadPcFile(fileId: String, fileName: String, size: Long) {
+        val uiId = pcUiId(fileId)
+        val safeName = File(fileName).name.ifBlank { "received_file" }
+        val folder = File(appContext.filesDir, "received").apply { mkdirs() }
+        val destination = File(folder, uiId.toString() + "_" + safeName)
+        try {
+            val request = pcRequest("/api/download/${Uri.encode(fileId)}").get().build()
+            httpClient.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) throw IOException("PC download failed (HTTP ${response.code})")
+                val body = response.body ?: throw IOException("PC sent an empty file")
+                post { callbacks.onTransferCreated(uiId, safeName, size, false) }
+                var loaded = 0L
+                var lastUpdate = SystemClock.elapsedRealtime()
+                body.byteStream().use { input ->
+                    FileOutputStream(destination).use { outputStream ->
+                        val buffer = ByteArray(64 * 1024)
+                        while (true) {
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            outputStream.write(buffer, 0, count)
+                            loaded += count
+                            val now = SystemClock.elapsedRealtime()
+                            if (now - lastUpdate >= 250L || (size > 0 && loaded == size)) {
+                                lastUpdate = now
+                                val current = loaded
+                                post { callbacks.onTransferProgress(uiId, false, current, size, "Receiving") }
+                            }
+                        }
+                        outputStream.flush()
+                    }
+                }
+                val actualSize = destination.length()
+                post {
+                    callbacks.onTransferProgress(uiId, false, actualSize, actualSize, "Complete")
+                    callbacks.onFileReceived(uiId, destination.absolutePath, actualSize)
+                }
+            }
+        } catch (error: Exception) {
+            try { destination.delete() } catch (_: Exception) { }
+            pcDownloadedFileIds.remove(fileId)
+            if (pcMode) post { callbacks.onStatus("Could not download $safeName: ${error.message ?: "network error"}", true) }
+        }
+    }
+
+    private fun reportPcTransfer(
+        id: String,
+        name: String,
+        loaded: Long,
+        total: Long,
+        speed: Double,
+        state: String
+    ) {
+        if (!pcMode) return
+        try {
+            val payload = JSONObject()
+                .put("id", id)
+                .put("direction", "phone-to-pc")
+                .put("name", name)
+                .put("loaded", loaded)
+                .put("total", total)
+                .put("bytesPerSecond", speed)
+                .put("state", state)
+                .toString()
+            val request = pcRequest("/api/transfer/progress")
+                .post(payload.toRequestBody("application/json".toMediaType()))
+                .build()
+            httpClient.newCall(request).enqueue(object : Callback {
+                override fun onFailure(call: okhttp3.Call, error: IOException) { }
+                override fun onResponse(call: okhttp3.Call, response: Response) { response.close() }
+            })
+        } catch (_: Exception) { }
+    }
+
+    private fun sendFileToPc(uri: Uri) {
+        io.execute {
+            var staged: File? = null
+            try {
+                val name = queryDisplayName(uri)
+                val folder = File(appContext.cacheDir, "outgoing").apply { mkdirs() }
+                val file = File.createTempFile("localdrop_pc_", ".upload", folder)
+                staged = file
+                val source = appContext.contentResolver.openInputStream(uri)
+                    ?: throw IOException("Cannot read selected file")
+                source.use { input ->
+                    FileOutputStream(file).use { outputStream ->
+                        input.copyTo(outputStream, 64 * 1024)
+                    }
+                }
+
+                val size = file.length()
+                val transferId = UUID.randomUUID().toString()
+                val uiId = pcUiId(transferId)
+                post { callbacks.onTransferCreated(uiId, name, size, true) }
+                var loaded = 0L
+                var lastUpdate = SystemClock.elapsedRealtime()
+                var lastLoaded = 0L
+                val body = object : RequestBody() {
+                    override fun contentType() = "application/octet-stream".toMediaType()
+                    override fun contentLength() = file.length()
+                    override fun writeTo(sink: BufferedSink) {
+                        FileInputStream(file).use { input ->
+                            val buffer = ByteArray(64 * 1024)
+                            while (true) {
+                                val count = input.read(buffer)
+                                if (count < 0) break
+                                sink.write(buffer, 0, count)
+                                loaded += count
+                                val now = SystemClock.elapsedRealtime()
+                                if (now - lastUpdate >= 250L || loaded == size) {
+                                    val elapsed = maxOf(1L, now - lastUpdate)
+                                    val speed = (loaded - lastLoaded) * 1000.0 / elapsed
+                                    lastUpdate = now
+                                    lastLoaded = loaded
+                                    val current = loaded
+                                    post { callbacks.onTransferProgress(uiId, true, current, size, "Sending") }
+                                    reportPcTransfer(transferId, name, current, size, speed, "running")
+                                }
+                            }
+                        }
+                    }
+                }
+                val request = pcRequest(
+                    "/api/upload?name=${Uri.encode(name)}&transferId=${Uri.encode(transferId)}"
+                ).post(body).build()
+
+                httpClient.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) {
+                        val detail = response.body?.string().orEmpty()
+                        throw IOException(detail.ifBlank { "PC upload failed (HTTP ${response.code})" })
+                    }
+                }
+                reportPcTransfer(transferId, name, size, size, 0.0, "completed")
+                post { callbacks.onTransferProgress(uiId, true, size, size, "Complete") }
+            } catch (error: Exception) {
+                val message = error.message ?: "upload failed"
+                post { callbacks.onStatus("PC file transfer failed: $message", true) }
+            } finally {
+                try { staged?.delete() } catch (_: Exception) { }
+            }
+        }
+    }
+
     fun sendText(text: String) {
+        if (pcMode) {
+            val payload = JSONObject().put("text", text).toString()
+            if (pcWebSocket?.send(payload) != true) {
+                post { callbacks.onStatus("PC chat is reconnecting. Please try again.", true) }
+            }
+            return
+        }
         val bytes = text.toByteArray(StandardCharsets.UTF_8)
         if (bytes.size > 4 * 1024 * 1024) {
             post { callbacks.onStatus("Message is too large", true) }
@@ -1302,6 +1654,10 @@ private class LocalLanEngine(
     }
 
     fun sendFile(uri: Uri) {
+        if (pcMode) {
+            sendFileToPc(uri)
+            return
+        }
         if (activeSocket?.isConnected != true) {
             post { callbacks.onStatus("Connect the other phone before sending files", false) }
             return
@@ -1449,7 +1805,30 @@ private class LocalLanEngine(
     }
 
     fun cancelSession() {
-        try { activeSocket?.close() } catch (_: Exception) {}
+        val wasPcMode = pcMode
+        val oldPcBase = pcBaseUrl
+        val oldPcToken = pcToken
+        pcMode = false
+        pcBaseUrl = null
+        pcToken = null
+        pcPollTask?.let { mainHandler.removeCallbacks(it) }
+        pcPollTask = null
+        try { pcWebSocket?.close(1000, "Disconnected") } catch (_: Exception) { }
+        pcWebSocket = null
+        pcDownloadedFileIds.clear()
+        if (wasPcMode && oldPcBase != null && !oldPcToken.isNullOrBlank()) {
+            io.execute {
+                try {
+                    val request = Request.Builder()
+                        .url("$oldPcBase/api/disconnect")
+                        .header("X-LocalDrop-Token", oldPcToken)
+                        .post(ByteArray(0).toRequestBody(null))
+                        .build()
+                    httpClient.newCall(request).execute().close()
+                } catch (_: Exception) { }
+            }
+        }
+        try { activeSocket?.close() } catch (_: Exception) { }
         activeSocket = null
         output = null
         try { hostServer?.close() } catch (_: Exception) {}
