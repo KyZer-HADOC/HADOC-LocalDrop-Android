@@ -1341,13 +1341,14 @@ private class LocalLanEngine(
         val scheme = uri?.scheme?.lowercase()
         val host = uri?.host
         val token = uri?.getQueryParameter("token")
-        if (uri == null || scheme !in setOf("http", "https") || host.isNullOrBlank() ||
+        if (uri == null || (scheme != "http" && scheme != "https") || host.isNullOrBlank() ||
             token.isNullOrBlank() || token.length < 24) {
             post { callbacks.onStatus("This is not a valid HADOC LocalDrop PC QR. Scan the QR shown in the Windows app.", false) }
             return
         }
 
-        val baseUrl = "$scheme://${uri.encodedAuthority}"
+        val authority = uri.encodedAuthority ?: host
+        val baseUrl = "$scheme://$authority"
         cancelSession()
         closed = false
         isHost = false
@@ -1380,8 +1381,8 @@ private class LocalLanEngine(
                 if (!pcMode) return@execute
 
                 val wsBase = when (scheme) {
-                    "https" -> "wss://${uri.encodedAuthority}"
-                    else -> "ws://${uri.encodedAuthority}"
+                    "https" -> "wss://$authority"
+                    else -> "ws://$authority"
                 }
                 val socketRequest = Request.Builder()
                     .url("$wsBase/ws?token=${Uri.encode(token)}")
