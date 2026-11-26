@@ -49,6 +49,7 @@ jobs:
             - Temporary Android Local-Only Hotspot (not the normal portable hotspot)
             - PC QR pairing can request a temporary connection to the router using Wi-Fi details embedded in the PC QR
             - All PC HTTP and WebSocket traffic is routed over the selected temporary Wi-Fi network
+            - The Windows app stores the router Wi-Fi password encrypted with Windows DPAPI
             - Wi-Fi only; Bluetooth is not required
             - One-time QR token; first successful device consumes the code
             - Direct local chat and file transfer with progress and speed display
