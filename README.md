@@ -38,6 +38,12 @@ The phone does not need the router password typed manually. The QR carries the W
 
 Android controls Wi-Fi connection approval. The app cannot silently join a protected Wi-Fi network or silently enable the phone's normal internet-sharing hotspot. Automatic temporary router joining for PC QR codes requires Android 10 or newer and the HADOC LocalDrop Android app. Scanning a PC QR with a generic camera/browser does not initiate the app-scoped Wi-Fi request.
 
+## Security
+
+- The Windows pairing QR contains the router Wi-Fi passphrase and one-time LocalDrop token. Keep the QR private and scan it only with a trusted phone.
+- The Windows app stores the router passphrase encrypted with Windows DPAPI for the current Windows user.
+- PC file transfer uses HTTP/WebSocket over the private local network, not end-to-end encrypted transport. Use a trusted network and do not expose the PC port to the public internet.
+
 ## Build
 
 Open in Android Studio or run:
