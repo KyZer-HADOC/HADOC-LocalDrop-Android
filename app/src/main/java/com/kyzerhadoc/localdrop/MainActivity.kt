@@ -965,6 +965,7 @@ private class LocalLanEngine(
     @Volatile private var pcToken: String? = null
     @Volatile private var pcName = "Your PC"
     @Volatile private var pcWebSocket: WebSocket? = null
+    @Volatile private var pcHttpClient: OkHttpClient? = null
     @Volatile private var pcPollTask: Runnable? = null
 
     @Volatile private var hotspotReservation: WifiManager.LocalOnlyHotspotReservation? = null
@@ -1336,6 +1337,12 @@ private class LocalLanEngine(
     }
 
 
+    private data class PcWifiInfo(
+        val ssid: String,
+        val password: String,
+        val security: String
+    )
+
     fun connectToPc(qrUrl: String) {
         val uri = try { Uri.parse(qrUrl.trim()) } catch (_: Exception) { null }
         val scheme = uri?.scheme?.lowercase()
@@ -1349,6 +1356,10 @@ private class LocalLanEngine(
 
         val authority = uri.encodedAuthority ?: host
         val baseUrl = "$scheme://$authority"
+        val wifiSsid = uri.getQueryParameter("wifiSsid").orEmpty()
+        val wifiPassword = uri.getQueryParameter("wifiPassword").orEmpty()
+        val wifiSecurity = uri.getQueryParameter("wifiSecurity")?.uppercase() ?: "WPA2"
+
         cancelSession()
         closed = false
         isHost = false
@@ -1357,8 +1368,119 @@ private class LocalLanEngine(
         pcBaseUrl = baseUrl
         pcToken = token
         pcDownloadedFileIds.clear()
-        post { callbacks.onStatus("Contacting HADOC LocalDrop on your PC…", false) }
 
+        if (wifiSsid.isNotBlank()) {
+            if (wifiSecurity !in setOf("OPEN", "WPA2", "WPA3") ||
+                (wifiSecurity != "OPEN" && wifiPassword.length !in 8..63)) {
+                post { callbacks.onStatus("The PC QR contains invalid router Wi-Fi details. Update the Wi-Fi settings in the Windows app and create a new QR.", false) }
+                pcMode = false
+                isJoining = false
+                return
+            }
+            if (Build.VERSION.SDK_INT < 29) {
+                post { callbacks.onStatus("Automatic temporary router connection requires Android 10 or newer. Connect to the same Wi-Fi manually and scan again.", false) }
+                pcMode = false
+                isJoining = false
+                return
+            }
+            post { callbacks.onStatus("Requesting temporary connection to ${wifiSsid}… Approve Android's Wi-Fi prompt.", false) }
+            requestPcWifiNetwork(
+                PcWifiInfo(wifiSsid, wifiPassword, wifiSecurity),
+                baseUrl,
+                scheme,
+                authority,
+                token
+            )
+        } else {
+            // Backward compatibility with older desktop QR codes: these work
+            // when the phone is already on the same local network as the PC.
+            post { callbacks.onStatus("Connecting over the current Wi-Fi network…", false) }
+            startPcConnection(baseUrl, scheme, authority, token)
+        }
+    }
+
+    private fun requestPcWifiNetwork(
+        info: PcWifiInfo,
+        baseUrl: String,
+        scheme: String,
+        authority: String,
+        token: String
+    ) {
+        try {
+            val specifierBuilder = WifiNetworkSpecifier.Builder().setSsid(info.ssid)
+            when (info.security) {
+                "OPEN" -> Unit
+                "WPA3" -> {
+                    if (Build.VERSION.SDK_INT < 31) {
+                        throw IOException("This Android version does not support WPA3 Wi-Fi pairing.")
+                    }
+                    specifierBuilder.setWpa3Passphrase(info.password)
+                }
+                else -> specifierBuilder.setWpa2Passphrase(info.password)
+            }
+
+            // Do not remove NET_CAPABILITY_INTERNET here: normal home routers
+            // usually provide internet, unlike the phone's Local-Only Hotspot.
+            val request = NetworkRequest.Builder()
+                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                .setNetworkSpecifier(specifierBuilder.build())
+                .build()
+
+            val callback = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    post { callbacks.onStatus("Connected to ${info.ssid} • opening HADOC LocalDrop on your PC…", false) }
+                    pcHttpClient = httpClient.newBuilder()
+                        .socketFactory(network.socketFactory)
+                        .build()
+                    startPcConnection(baseUrl, scheme, authority, token)
+                }
+
+                override fun onUnavailable() {
+                    val matchingNetwork = connectivity.allNetworks.firstOrNull { candidate ->
+                        val caps = connectivity.getNetworkCapabilities(candidate)
+                        val wifiInfo = caps?.transportInfo as? android.net.wifi.WifiInfo
+                        caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true &&
+                            wifiInfo?.ssid?.trim('"') == info.ssid
+                    }
+                    if (matchingNetwork != null) {
+                        post { callbacks.onStatus("Router Wi-Fi is connected • opening your PC…", false) }
+                        pcHttpClient = httpClient.newBuilder()
+                            .socketFactory(matchingNetwork.socketFactory)
+                            .build()
+                        startPcConnection(baseUrl, scheme, authority, token)
+                    } else {
+                        post { callbacks.onStatus("Android could not join ${info.ssid}. Check that Wi-Fi is enabled, the password is correct, and approve the Android Wi-Fi prompt.", false) }
+                        pcMode = false
+                        isJoining = false
+                        pcHttpClient = null
+                        unregisterWifiCallback()
+                    }
+                }
+
+                override fun onLost(network: Network) {
+                    if (pcMode) {
+                        post { callbacks.onStatus("The temporary router Wi-Fi connection was lost.", false) }
+                        cancelSession()
+                    }
+                }
+            }
+            wifiNetworkCallback = callback
+            connectivity.requestNetwork(request, callback, 60_000)
+        } catch (error: Exception) {
+            unregisterWifiCallback()
+            pcMode = false
+            isJoining = false
+            pcHttpClient = null
+            post { callbacks.onStatus("Could not request router Wi-Fi: " + (error.message ?: "check the Wi-Fi details"), false) }
+        }
+    }
+
+    private fun startPcConnection(
+        baseUrl: String,
+        scheme: String,
+        authority: String,
+        token: String
+    ) {
         io.execute {
             try {
                 val connectRequest = Request.Builder()
@@ -1369,7 +1491,7 @@ private class LocalLanEngine(
                     .post(ByteArray(0).toRequestBody(null))
                     .build()
 
-                val remotePcName = httpClient.newCall(connectRequest).execute().use { response ->
+                val remotePcName = pcHttpClientOrDefault().newCall(connectRequest).execute().use { response ->
                     val responseText = response.body?.string().orEmpty()
                     if (!response.isSuccessful) {
                         val detail = try { JSONObject(responseText).optString("error") } catch (_: Exception) { "" }
@@ -1380,15 +1502,12 @@ private class LocalLanEngine(
                 pcName = remotePcName
                 if (!pcMode) return@execute
 
-                val wsBase = when (scheme) {
-                    "https" -> "wss://$authority"
-                    else -> "ws://$authority"
-                }
+                val wsBase = if (scheme == "https") "wss://$authority" else "ws://$authority"
                 val socketRequest = Request.Builder()
                     .url("$wsBase/ws?token=${Uri.encode(token)}")
                     .build()
 
-                pcWebSocket = httpClient.newWebSocket(socketRequest, object : WebSocketListener() {
+                pcWebSocket = pcHttpClientOrDefault().newWebSocket(socketRequest, object : WebSocketListener() {
                     override fun onOpen(webSocket: WebSocket, response: Response) {
                         if (!pcMode) {
                             webSocket.close(1000, "Session ended")
@@ -1441,6 +1560,8 @@ private class LocalLanEngine(
         }
     }
 
+    private fun pcHttpClientOrDefault(): OkHttpClient = pcHttpClient ?: httpClient
+
     private fun pcRequest(path: String): Request.Builder {
         val base = pcBaseUrl ?: throw IOException("PC session is not active")
         val token = pcToken ?: throw IOException("PC pairing token is missing")
@@ -1466,7 +1587,7 @@ private class LocalLanEngine(
         if (!pcMode) return
         try {
             val request = pcRequest("/api/files").get().build()
-            val items = httpClient.newCall(request).execute().use { response ->
+            val items = pcHttpClientOrDefault().newCall(request).execute().use { response ->
                 if (!response.isSuccessful) throw IOException("PC file list failed (HTTP ${response.code})")
                 JSONArray(response.body?.string().orEmpty())
             }
