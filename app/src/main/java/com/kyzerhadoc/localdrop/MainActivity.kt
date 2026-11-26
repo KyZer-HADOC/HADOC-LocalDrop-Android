@@ -1614,7 +1614,7 @@ private class LocalLanEngine(
         val destination = File(folder, uiId.toString() + "_" + safeName)
         try {
             val request = pcRequest("/api/download/${Uri.encode(fileId)}").get().build()
-            httpClient.newCall(request).execute().use { response ->
+            pcHttpClientOrDefault().newCall(request).execute().use { response ->
                 if (!response.isSuccessful) throw IOException("PC download failed (HTTP ${response.code})")
                 val body = response.body ?: throw IOException("PC sent an empty file")
                 post { callbacks.onTransferCreated(uiId, safeName, size, false) }
@@ -1930,6 +1930,10 @@ private class LocalLanEngine(
         val wasPcMode = pcMode
         val oldPcBase = pcBaseUrl
         val oldPcToken = pcToken
+        val oldPcClient = pcHttpClient ?: httpClient
+        val oldWifiCallback = wifiNetworkCallback
+        wifiNetworkCallback = null
+
         pcMode = false
         pcBaseUrl = null
         pcToken = null
@@ -1938,7 +1942,10 @@ private class LocalLanEngine(
         try { pcWebSocket?.close(1000, "Disconnected") } catch (_: Exception) { }
         pcWebSocket = null
         pcDownloadedFileIds.clear()
+
         if (wasPcMode && oldPcBase != null && !oldPcToken.isNullOrBlank()) {
+            // Keep the temporary network requested until the PC has received
+            // the disconnect message; Android can then restore the prior Wi-Fi.
             io.execute {
                 try {
                     val request = Request.Builder()
@@ -1946,10 +1953,18 @@ private class LocalLanEngine(
                         .header("X-LocalDrop-Token", oldPcToken)
                         .post(ByteArray(0).toRequestBody(null))
                         .build()
-                    httpClient.newCall(request).execute().close()
+                    oldPcClient.newCall(request).execute().close()
                 } catch (_: Exception) { }
+                finally {
+                    if (pcHttpClient === oldPcClient) pcHttpClient = null
+                    unregisterWifiCallback(oldWifiCallback)
+                }
             }
+        } else {
+            pcHttpClient = null
+            unregisterWifiCallback(oldWifiCallback)
         }
+
         try { activeSocket?.close() } catch (_: Exception) { }
         activeSocket = null
         output = null
@@ -1957,19 +1972,16 @@ private class LocalLanEngine(
         hostServer = null
         try { hotspotReservation?.close() } catch (_: Exception) {}
         hotspotReservation = null
-        unregisterWifiCallback()
         hostToken = null
         tokenConsumed = false
         isHost = false
         isJoining = false
     }
 
-    private fun unregisterWifiCallback() {
-        val callback = wifiNetworkCallback
-        wifiNetworkCallback = null
-        if (callback != null) {
-            try { connectivity.unregisterNetworkCallback(callback) } catch (_: Exception) {}
-        }
+    private fun unregisterWifiCallback(callback: ConnectivityManager.NetworkCallback? = wifiNetworkCallback) {
+        if (callback == null) return
+        if (wifiNetworkCallback === callback) wifiNetworkCallback = null
+        try { connectivity.unregisterNetworkCallback(callback) } catch (_: Exception) {}
     }
 
     fun close() {
