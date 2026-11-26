@@ -55,7 +55,7 @@ jobs:
             - Native **Connect PC** mode: scan the Windows app QR and use chat/file sharing inside the Android app
             - Phone-to-PC uploads and PC-to-phone downloads over the local network
 
-            **Connection note:** Android displays its own Wi-Fi join approval after scanning. Approve that system prompt to connect. Local-Only Hotspot has no internet access and is released when the sharing session ends.
+            **Connection note:** Android displays its own Wi-Fi join approval after scanning. Approve that system prompt to connect. For PC pairing, the QR contains the router Wi-Fi passphrase and must be kept private. The app releases its temporary router connection when the PC session ends. Phone-to-phone Local-Only Hotspot has no internet access and is released when that sharing session ends.
 
             This is a debug-signed APK intended for initial device testing. Source code is available in the repository and GitHub's automatic source archives.
           files: |
