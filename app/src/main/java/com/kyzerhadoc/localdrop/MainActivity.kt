@@ -1673,7 +1673,7 @@ private class LocalLanEngine(
             val request = pcRequest("/api/transfer/progress")
                 .post(payload.toRequestBody("application/json".toMediaType()))
                 .build()
-            httpClient.newCall(request).enqueue(object : Callback {
+            pcHttpClientOrDefault().newCall(request).enqueue(object : Callback {
                 override fun onFailure(call: okhttp3.Call, error: IOException) { }
                 override fun onResponse(call: okhttp3.Call, response: Response) { response.close() }
             })
@@ -1732,7 +1732,7 @@ private class LocalLanEngine(
                     "/api/upload?name=${Uri.encode(name)}&transferId=${Uri.encode(transferId)}"
                 ).post(body).build()
 
-                httpClient.newCall(request).execute().use { response ->
+                pcHttpClientOrDefault().newCall(request).execute().use { response ->
                     if (!response.isSuccessful) {
                         val detail = response.body?.string().orEmpty()
                         throw IOException(detail.ifBlank { "PC upload failed (HTTP ${response.code})" })
