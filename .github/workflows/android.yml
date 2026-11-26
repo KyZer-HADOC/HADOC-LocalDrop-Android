@@ -34,12 +34,12 @@ jobs:
         run: |
           cp app/build/outputs/apk/debug/app-debug.apk HADOC-LocalDrop-Android.apk
           sha256sum HADOC-LocalDrop-Android.apk > SHA256SUMS.txt
-      - name: Publish v1.0.4 GitHub Release
+      - name: Publish v1.0.5 GitHub Release
         if: github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[release]')
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.4
-          name: HADOC LocalDrop Android v1.0.4
+          tag_name: v1.0.5
+          name: HADOC LocalDrop Android v1.0.5
           body: |
             ## HADOC LocalDrop Android
 
@@ -47,6 +47,8 @@ jobs:
 
             - QR pairing with **Show QR** and **Scan QR**
             - Temporary Android Local-Only Hotspot (not the normal portable hotspot)
+            - PC QR pairing can request a temporary connection to the router using Wi-Fi details embedded in the PC QR
+            - All PC HTTP and WebSocket traffic is routed over the selected temporary Wi-Fi network
             - Wi-Fi only; Bluetooth is not required
             - One-time QR token; first successful device consumes the code
             - Direct local chat and file transfer with progress and speed display
@@ -63,7 +65,7 @@ jobs:
           prerelease: false
           generate_release_notes: true
       - name: Attach APK to version tag release
-        if: startsWith(github.ref, 'refs/tags/') && github.ref_name != 'v1.0.4'
+        if: startsWith(github.ref, 'refs/tags/') && github.ref_name != 'v1.0.5'
         uses: softprops/action-gh-release@v2
         with:
           files: |
