@@ -332,6 +332,14 @@ private fun LocalDropApp() {
                         .setOrientationLocked(false)
                     scannerLauncher.launch(options)
                 }
+                "connectPc" -> {
+                    val options = ScanOptions()
+                        .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                        .setPrompt("Scan the QR code shown by HADOC LocalDrop on your PC")
+                        .setBeepEnabled(false)
+                        .setOrientationLocked(false)
+                    scannerLauncher.launch(options)
+                }
             }
         }
         pendingAction = ""
@@ -361,6 +369,13 @@ private fun LocalDropApp() {
                     status = "Starting your private hotspot…"
                     engine.startHost()
                 }
+            } else if (action == "connectPc") {
+                val options = ScanOptions()
+                    .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                    .setPrompt("Scan the QR code shown by HADOC LocalDrop on your PC")
+                    .setBeepEnabled(false)
+                    .setOrientationLocked(false)
+                scannerLauncher.launch(options)
             } else {
                 val options = ScanOptions()
                     .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
@@ -405,14 +420,7 @@ private fun LocalDropApp() {
             "home" -> HomePage(
                 onShowQr = { requestWifiPermission("host") },
                 onScanQr = { requestWifiPermission("scan") },
-                onConnectPc = {
-                    val options = ScanOptions()
-                        .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                        .setPrompt("Scan the QR code shown by HADOC LocalDrop on your PC")
-                        .setBeepEnabled(false)
-                        .setOrientationLocked(false)
-                    scannerLauncher.launch(options)
-                }
+                onConnectPc = { requestWifiPermission("connectPc") }
             )
             "starting" -> ProgressPage(
                 title = "Preparing your hotspot",
